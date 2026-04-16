@@ -1,0 +1,95 @@
+@startuml
+skinparam Style strictuml
+skinparam SequenceMessageAlignment center
+
+actor "Респондент" as Respondent
+participant "Forms Frontend" as Frontend
+participant "Ingestion API" as Ingestion
+queue "Message Queue" as Queue
+participant "Queue Consumer\n(Data Processor)" as Processor
+participant "GeoIP Service" as Geo
+database "Form Schema DB" as SchemaDB
+database "Response Database" as DB
+participant "Alerting Service" as Alert
+
+== Синхронная фаза: Приём ответа (успешно) ==
+
+Respondent -> Frontend: Заполняет и отправляет форму
+Frontend -> Ingestion: POST /api/responses
+activate Ingestion
+
+Ingestion -> SchemaDB: SELECT schema WHERE form_id = ?
+SchemaDB --> Ingestion: OK (схема найдена)
+
+Ingestion -> Queue: Send message
+Queue --> Ingestion: Message accepted
+
+Ingestion --> Frontend: 202 Accepted
+deactivate Ingestion
+
+Frontend --> Respondent: "Спасибо! Ваш ответ принят"
+
+== Асинхронная фаза: Обработка с ошибкой ==
+
+Queue --[#blue]> Processor: Deliver message
+activate Processor
+
+Processor -> SchemaDB: SELECT schema (для типизации)
+SchemaDB --> Processor: {fields: [...]}
+
+Processor -> Geo: GET /geo?ip=...
+activate Geo
+note right of Geo #FF6B6B: ❌ GeoIP Service НЕ ДОСТУПЕН\n(таймаут 3 сек)
+Geo --[#red]> Processor: TimeoutException
+deactivate Geo
+
+Processor -> Processor: Логирует предупреждение\n"GeoIP unavailable, continuing without geo"
+
+note right of Processor: Продолжаем обработку\n(geo-данные останутся null)
+
+Processor -> Processor: Парсинг User-Agent\nРасчёт времени заполнения
+
+== Критическая ошибка: Антиспам-сервис упал ==
+
+Processor -> Processor: Подготовка запроса к Anti-spam
+
+note right of Processor #FF6B6B: ❌ Anti-spam Engine\nНЕ ОТВЕЧАЕТ\n(connection refused)
+
+Processor -> Processor: 3 попытки с exponential backoff
+
+note over Processor: Все попытки неудачны
+
+Processor -> Alert: Отправка алерта\n"Anti-spam service is down"
+activate Alert
+Alert --> Alert: Уведомление администратора
+deactivate Alert
+
+== Компенсирующие действия ==
+
+Processor -> Processor: Принимает решение:\n- quality_score = null\n- is_suspect = null\n- processing_status = "degraded"
+
+Processor -> DB: BEGIN TRANSACTION
+
+note right of Processor: Сохраняем даже без антиспама\n(лучше сохранить, чем потерять)
+
+Processor -> DB: INSERT INTO enriched_responses\n(geo = null, anti_spam_result = null)
+
+Processor -> DB: UPDATE form_aggregates\nSET total_responses = total_responses + 1
+
+Processor -> DB: COMMIT TRANSACTION
+DB --> Processor: OK
+
+note over Processor: Сообщение НЕ удаляется из очереди?\nСпорный момент - см. комментарий
+
+Processor -> Queue: ACK (удаляем сообщение)
+deactivate Processor
+
+== Фаза восстановления (после починки) ==
+
+note over Queue, Processor: Через 5 минут Anti-spam восстановился
+
+Queue --[#blue]> Processor: Deliver message (повторно? НЕТ - уже удалено)
+
+note over Queue #FFD700: ⚠️ Проблема: ответ сохранён\nбез проверки антиспамом,\nно повторно уже не обработается
+
+@enduml

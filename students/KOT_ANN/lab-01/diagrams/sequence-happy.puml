@@ -1,0 +1,104 @@
+@startuml
+skinparam Style strictuml
+skinparam SequenceMessageAlignment center
+
+actor "Респондент" as Respondent
+participant "Forms Frontend" as Frontend
+participant "Ingestion API" as Ingestion
+queue "Message Queue" as Queue
+participant "Queue Consumer\n(Data Processor)" as Processor
+participant "GeoIP Service" as Geo
+participant "Anti-spam Engine" as Antispam
+database "Response Database" as DB
+database "Form Schema DB" as SchemaDB
+participant "Notification Service" as Notifier
+
+== Синхронная фаза: Приём ответа ==
+
+Respondent -> Frontend: Заполняет и отправляет форму
+Frontend -> Ingestion: POST /api/responses {form_id, answers, metadata}
+activate Ingestion
+
+note right of Ingestion: Минимальная валидация\n(не пустой, привязан к форме)
+
+Ingestion -> SchemaDB: SELECT schema WHERE form_id = ?
+activate SchemaDB
+SchemaDB --> Ingestion: {fields: [{name:"rating", type:"int"}, ...]}
+deactivate SchemaDB
+
+Ingestion -> Ingestion: Первичная валидация\n(обязательные поля заполнены)
+
+Ingestion -> Queue: Send message {response_id, form_id, answers, metadata}
+activate Queue
+Queue --> Ingestion: Message accepted
+deactivate Queue
+
+Ingestion --> Frontend: 202 Accepted (Ответ принят в обработку)
+deactivate Ingestion
+
+Frontend --> Respondent: "Спасибо! Ваш ответ принят"
+
+== Асинхронная фаза: Обработка данных (Eventual Consistency) ==
+
+note over Queue, Processor: Фоновая обработка из очереди
+
+Queue --[#blue]> Processor: Deliver message
+activate Processor
+
+Processor -> SchemaDB: SELECT schema (повторно, для типизации)
+activate SchemaDB
+SchemaDB --> Processor: {fields: [...]}
+deactivate SchemaDB
+
+== Обогащение метаданными ==
+
+Processor -> Geo: GET /geo?ip=77.88.55.66
+activate Geo
+Geo --> Processor: {country: "Россия", city: "Москва"}
+deactivate Geo
+
+Processor -> Processor: Парсинг User-Agent\n(устройство: iOS, Safari)
+
+Processor -> Processor: Расчёт времени заполнения\n(submitted_at - started_at) = 149 сек
+
+== Проверка на отписку ==
+
+Processor -> Antispam: POST /analyze {answers, filling_time, ...}
+activate Antispam
+note right of Antispam: Проверка:\n- время > порога?\n- длина текста?\n- паттерны "аааа"?\n- уникальность ответов?
+Antispam --> Processor: {quality_score: 0.98, is_suspect: false}
+deactivate Antispam
+
+== Сохранение в БД ==
+
+Processor -> DB: BEGIN TRANSACTION
+activate DB
+
+Processor -> DB: INSERT INTO enriched_responses\n(response_id, answers, geo, device,\n filling_time, quality_score, is_suspect)
+
+Processor -> DB: UPDATE form_aggregates\nSET total_responses = total_responses + 1,\nWHERE form_id = ?
+
+note right of Processor: Если ответ качественный -\nобновляем метрики
+
+Processor -> DB: COMMIT TRANSACTION
+DB --> Processor: OK
+deactivate DB
+
+== Проверка триггеров уведомлений ==
+
+Processor -> Processor: Проверка правил формы\n(есть ли триггер на rating < 3?)
+
+note right of Processor: В текущем ответе rating = 5\nУсловия триггера НЕ сработали
+
+Processor -> Queue: ACK (удалить сообщение из очереди)
+deactivate Processor
+
+== Альтернативный поток (если бы триггер сработал) ==
+
+note over Processor, Notifier: (Не в этом сценарии, но для полноты картины)
+Processor --[#blue]> Notifier: Command: SendAlert {form_id, message: "Низкий рейтинг!"}
+activate Notifier
+Notifier -> Notifier: Отправка email/push автору формы
+deactivate Notifier
+
+@enduml
