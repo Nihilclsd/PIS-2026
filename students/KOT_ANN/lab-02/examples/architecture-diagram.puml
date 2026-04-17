@@ -1,0 +1,121 @@
+@startuml
+!define RECTANGLE class
+
+skinparam componentStyle rectangle
+skinparam backgroundColor #FEFEFE
+skinparam arrow {
+  Color #555555
+  FontColor #555555
+  FontSize 11
+}
+
+title Диаграмма слоёв — Response Processor Service (Откликнись)
+
+' ============================================
+' INFRASTRUCTURE LAYER (верхний слой)
+' ============================================
+package "Infrastructure Layer" #DDDDDD {
+  
+  package "Inbound Adapters" {
+    component "QueueConsumer" as QueueConsumer <<входящий адаптер>>
+    note right of QueueConsumer : Забирает сообщения\nиз RabbitMQ/Kafka
+  }
+  
+  package "Outbound Adapters" {
+    component "InMemoryFormRepository" as FormRepo <<исходящий адаптер>>
+    component "InMemoryResponseRepository" as ResponseRepo <<исходящий адаптер>>
+    component "MockGeoService" as GeoMock <<исходящий адаптер>>
+    component "MockAntiSpamService" as AntiSpamMock <<исходящий адаптер>>
+    component "MockNotificationService" as NotifyMock <<исходящий адаптер>>
+  }
+  
+  package "Config" {
+    component "DependencyContainer" as DI <<DI контейнер>>
+    note right of DI : Связывает порты\nс адаптерами
+  }
+}
+
+' ============================================
+' APPLICATION LAYER (средний слой)
+' ============================================
+package "Application Layer" #BBBBBB {
+  
+  package "Inbound Ports" {
+    interface "ProcessResponseUseCase" as ProcessIn <<входящий порт>>
+    interface "GetAggregatesUseCase" as GetAggIn <<входящий порт>>
+    note top of ProcessIn : Обработка ответа\n(обогащение + классификация)
+    note top of GetAggIn : Получение статистики\nформы
+  }
+  
+  package "Outbound Ports" {
+    interface "FormSchemaRepository" as FormOut <<исходящий порт>>
+    interface "ResponseRepository" as ResponseOut <<исходящий порт>>
+    interface "GeoService" as GeoOut <<исходящий порт>>
+    interface "AntiSpamService" as AntiSpamOut <<исходящий порт>>
+    interface "NotificationService" as NotifyOut <<исходящий порт>>
+  }
+  
+  component "ResponseProcessor" as Service <<сервис>>
+  note bottom of Service : Реализует входящие порты\nи использует исходящие
+}
+
+' ============================================
+' DOMAIN LAYER (нижний слой)
+' ============================================
+package "Domain Layer" #999999 {
+  
+  component "Response" as ResponseEntity <<сущность>>
+  component "Form" as FormEntity <<сущность>>
+  component "FormAggregates" as AggregateVO <<Value Object>>
+  component "DomainException" as DomainEx <<исключение>>
+  
+  note bottom of ResponseEntity : Доменная логика:\n- enrich_geo()\n- classify()\n- calculate_filling_time()
+  note bottom of FormEntity : Хранит схему полей\nи настройки антиспама
+}
+
+' ============================================
+' ЗАВИСИМОСТИ (стрелки)
+' ============================================
+
+' Infrastructure → Application (входящие)
+QueueConsumer .down.> ProcessIn : вызывает
+DI .down.> ProcessIn : реализует
+DI .down.> GetAggIn : реализует
+
+' Infrastructure → Application (исходящие)
+FormRepo .up.> FormOut : реализует
+ResponseRepo .up.> ResponseOut : реализует
+GeoMock .up.> GeoOut : реализует
+AntiSpamMock .up.> AntiSpamOut : реализует
+NotifyMock .up.> NotifyOut : реализует
+
+' Application → Domain
+Service .down.> ResponseEntity : использует
+Service .down.> FormEntity : использует
+Service .down.> AggregateVO : использует
+Service .down.> DomainEx : выбрасывает
+
+' Application Layer внутренние связи
+ProcessIn <|.. Service : реализует
+GetAggIn <|.. Service : реализует
+Service .right.> FormOut : вызывает
+Service .right.> ResponseOut : вызывает
+Service .right.> GeoOut : вызывает
+Service .right.> AntiSpamOut : вызывает
+Service .right.> NotifyOut : вызывает
+
+' ============================================
+' ЛЕГЕНДА (направление зависимостей)
+' ============================================
+note bottom of DI
+  <b>Направление зависимостей:</b>
+  ─────────────────────────────────
+  Infrastructure → Application → Domain
+  
+  <b>Правило:</b> Domain НЕ знает
+  о Application и Infrastructure.
+  Application знает о Domain,
+  но не знает о Infrastructure.
+end note
+
+@enduml

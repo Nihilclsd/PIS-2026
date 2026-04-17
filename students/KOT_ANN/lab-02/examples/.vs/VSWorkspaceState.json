@@ -1,0 +1,16 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\src_python",
+    "\\src_python\\domain",
+    "\\src_python\\domain\\exceptions",
+    "\\src_python\\domain\\models",
+    "\\src_python\\infrastructure",
+    "\\src_python\\infrastructure\\adapter",
+    "\\src_python\\infrastructure\\adapter\\in",
+    "\\src_python\\infrastructure\\adapter\\out",
+    "\\src_python\\infrastructure\\config"
+  ],
+  "SelectedNode": "\\src_python",
+  "PreviewInSolutionExplorer": false
+}
