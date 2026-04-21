@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package response_service;
+
+service ResponseService {
+  rpc ProcessResponse(ProcessResponseRequest) returns (ProcessResponseResponse);
+  rpc GetResponse(GetResponseRequest) returns (ResponseDto);
+  rpc ReclassifyResponse(ReclassifyResponseRequest) returns (ReclassifyResponseResponse);
+  rpc ListResponses(ListResponsesRequest) returns (ListResponsesResponse);
+  rpc GetFormStats(GetFormStatsRequest) returns (FormStatsDto);
+  rpc StreamResponses(StreamResponsesRequest) returns (stream StreamResponsesResponse);
+}
+
+message ProcessResponseRequest {
+  string response_id = 1;
+  string form_id = 2;
+  map<string, string> answers = 3;
+  string ip_address = 4;
+  string user_agent = 5;
+  int64 started_at = 6;
+  int64 submitted_at = 7;
+}
+
+message ProcessResponseResponse {
+  bool is_suspect = 1;
+  float quality_score = 2;
+  string suspect_reason = 3;
+}
+
+message GetResponseRequest {
+  string response_id = 1;
+}
+
+message ResponseDto {
+  string response_id = 1;
+  string form_id = 2;
+  map<string, string> answers = 3;
+  int64 started_at = 4;
+  int64 submitted_at = 5;
+  string ip_address = 6;
+  string user_agent = 7;
+  string geo_country = 8;
+  string geo_city = 9;
+  string device_type = 10;
+  int32 filling_time_sec = 11;
+  float quality_score = 12;
+  bool is_suspect = 13;
+  string suspect_reason = 14;
+}
+
+message ReclassifyResponseRequest {
+  string response_id = 1;
+  float quality_score = 2;
+  bool is_suspect = 3;
+  string suspect_reason = 4;
+}
+
+message ReclassifyResponseResponse {
+  string response_id = 1;
+  bool is_suspect = 2;
+  float quality_score = 3;
+}
+
+message ListResponsesRequest {
+  string form_id = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+  bool only_quality = 4;
+}
+
+message ListResponsesResponse {
+  repeated ResponseDto responses = 1;
+  int32 total = 2;
+}
+
+message GetFormStatsRequest {
+  string form_id = 1;
+}
+
+message FormStatsDto {
+  string form_id = 1;
+  int32 total_responses = 2;
+  int32 quality_responses = 3;
+  int32 suspect_responses = 4;
+  float average_quality = 5;
+  float average_rating = 6;
+}
+
+message StreamResponsesRequest {
+  string form_id = 1;
+  int32 interval_sec = 2;
+}
+
+message StreamResponsesResponse {
+  string response_id = 1;
+  string form_id = 2;
+  bool is_suspect = 3;
+  float quality_score = 4;
+  int64 submitted_at = 5;
+}
